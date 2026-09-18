@@ -1,0 +1,7 @@
+# Tor Configuration for Tor IP Rotator (Windows Prototype)
+# Strictly bind to localhost to avoid exposing ports to LAN/WAN
+SocksPort 127.0.0.1:9050
+ControlPort 127.0.0.1:9051
+
+# Cookie Authentication ensures only local authorized processes can control Tor
+CookieAuthentication 1

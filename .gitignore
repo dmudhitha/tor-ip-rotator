@@ -1,0 +1,31 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Browser Profiles
+.firefox_tor_profile/
+*.profile/
+
+# Tor Runtime Data, State & Secrets
+tor/data/
+*.authcookie
+control_auth_cookie
+
+# Logs
+logs/
+*.log
+
+# IDE & System Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

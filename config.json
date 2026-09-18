@@ -1,0 +1,12 @@
+{
+    "rotation_interval_minutes": 30,
+    "tor_control_host": "127.0.0.1",
+    "tor_control_port": 9051,
+    "tor_socks_host": "127.0.0.1",
+    "tor_socks_port": 9050,
+    "tor_control_password": "",
+    "tor_cookie_path": "",
+    "ip_check_url": "https://api.ipify.org?format=json",
+    "rotation_retry_count": 3,
+    "rotation_wait_seconds": 15
+}
