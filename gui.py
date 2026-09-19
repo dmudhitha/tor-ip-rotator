@@ -97,6 +97,7 @@ class TorRotatorGUI(ctk.CTk):
         self.mock_service_stop: Optional[threading.Event] = None
         self.is_sim_mode = False
         self.is_tor_active = False
+        self.real_isp_ip: Optional[str] = None
 
         # Countdown tracker
         self.seconds_remaining = 0
@@ -246,6 +247,14 @@ class TorRotatorGUI(ctk.CTk):
             text_color="#10b981"
         )
         self.country_lbl.pack(anchor="w", pady=(2, 0))
+
+        self.real_ip_lbl = ctk.CTkLabel(
+            ip_left_box,
+            text="🏠 Real ISP IP: Detecting...",
+            font=ctk.CTkFont(size=12),
+            text_color="#9ca3af"
+        )
+        self.real_ip_lbl.pack(anchor="w", pady=(3, 0))
 
         # Action buttons on IP Card
         btn_box = ctk.CTkFrame(ip_center, fg_color="transparent")
@@ -573,50 +582,79 @@ class TorRotatorGUI(ctk.CTk):
             logger.warning(f"Error stopping Tor process: {e}")
 
     def _initial_check(self):
-        """Initial background check on application startup.
-        Tor is STOPPED by default. Ensures direct ISP real IP connection."""
+        """Initial background connection and IP detection test on application startup."""
         def run():
             if self.is_closing:
                 return
-            self._update_status("● Checking Direct IP...", "#f59e0b")
-            self._update_ip("Fetching Direct Real IP...")
+            self._update_status("● Checking Connection...", "#f59e0b")
+            self._update_ip("Fetching IP...")
 
-            # 1. Stop any residual Tor background daemon or VPN to guarantee Real IP default
-            self._stop_tor_daemon()
-            try:
-                if hasattr(self, "vpn_controller") and self.vpn_controller.is_active:
-                    self.vpn_controller.stop_vpn()
-                SystemProxyController.set_system_proxy(enable=False)
-            except Exception:
-                pass
-
-            self.is_tor_active = False
-            self._update_status("● Tor Disabled (Real IP)", "#9ca3af")
-            if hasattr(self, "ip_caption"):
-                self._safe_after(0, lambda: self.ip_caption.configure(
-                    text="CURRENT IP (DIRECT REAL CONNECTION)",
-                    text_color="#9ca3af"
-                ))
-            if hasattr(self, "tor_header_btn"):
-                self._safe_after(0, lambda: self.tor_header_btn.configure(
-                    state="normal",
-                    text="🚀 Enable Tor",
-                    fg_color="#10b981",
-                    hover_color="#059669"
-                ))
-
-            # 2. Fetch real direct ISP IP without proxy
+            # 1. Fetch real direct ISP IP without proxy
+            real_ip = None
             try:
                 resp = requests.get("https://api.ipify.org", timeout=6)
                 if resp.status_code == 200:
                     real_ip = resp.text.strip()
+                    self.real_isp_ip = real_ip
+                    self._safe_after(0, lambda: self.real_ip_lbl.configure(text=f"🏠 Real ISP IP: {real_ip} (Direct Connection)"))
+                    logger.info(f"Direct connection checked. Real ISP IP: {real_ip}")
+            except Exception as e:
+                logger.warning(f"Could not fetch initial real IP: {e}")
+
+            # 2. Check if Tor is actively running and connected
+            connected, msg = self.rotator.check_tor_connection()
+            if not connected:
+                # Check if SOCKS port is responsive
+                if self.rotator.is_port_open(self.rotator.socks_host, self.rotator.socks_port):
+                    connected = True
+
+            if connected:
+                self.is_tor_active = True
+                self._update_status("● Connected", "#10b981")
+                if hasattr(self, "ip_caption"):
+                    self._safe_after(0, lambda: self.ip_caption.configure(
+                        text="CURRENT TOR EXIT IP",
+                        text_color="#3b82f6"
+                    ))
+                if hasattr(self, "tor_header_btn"):
+                    self._safe_after(0, lambda: self.tor_header_btn.configure(
+                        state="normal",
+                        text="🛑 Stop Tor & Browse Real IP",
+                        fg_color="#dc2626",
+                        hover_color="#b91c1c"
+                    ))
+                if real_ip and hasattr(self, "real_ip_lbl"):
+                    self._safe_after(0, lambda: self.real_ip_lbl.configure(text=f"🏠 Real ISP IP: {real_ip} (Direct Connection)"))
+
+                # Detect and display Tor Exit IP
+                ip, err = self.rotator.get_current_ip(retries=3)
+                if ip:
+                    self._update_ip(ip)
+                    logger.info(f"Tor is active. Public Tor Exit IP is {ip}")
+                else:
+                    self._update_ip("Connected (Circuit Building...)")
+            else:
+                self.is_tor_active = False
+                self._update_status("● Tor Disabled (Real IP)", "#9ca3af")
+                if hasattr(self, "ip_caption"):
+                    self._safe_after(0, lambda: self.ip_caption.configure(
+                        text="CURRENT IP (DIRECT REAL CONNECTION)",
+                        text_color="#9ca3af"
+                    ))
+                if hasattr(self, "tor_header_btn"):
+                    self._safe_after(0, lambda: self.tor_header_btn.configure(
+                        state="normal",
+                        text="🚀 Enable Tor",
+                        fg_color="#10b981",
+                        hover_color="#059669"
+                    ))
+                if hasattr(self, "real_ip_lbl"):
+                    self._safe_after(0, lambda: self.real_ip_lbl.configure(text="🧅 Tor Status: Disabled / Stopped"))
+
+                if real_ip:
                     self._update_ip(real_ip, "📍 Location: Direct ISP Connection (Real IP)")
-                    logger.info(f"Tor stopped by default. Direct Real ISP IP: {real_ip}")
                 else:
                     self._update_ip("Direct Real IP", "📍 Location: Direct ISP Connection (Real IP)")
-            except Exception as e:
-                logger.warning(f"Failed to fetch initial real IP: {e}")
-                self._update_ip("Direct Real IP", "📍 Location: Direct ISP Connection (Real IP)")
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -780,6 +818,8 @@ class TorRotatorGUI(ctk.CTk):
                     logger.info(f"Tor re-enabled. Public Exit IP: {ip}")
                 else:
                     self._update_ip("Connected")
+                if hasattr(self, "real_ip_lbl") and hasattr(self, "real_isp_ip") and self.real_isp_ip:
+                    self._safe_after(0, lambda: self.real_ip_lbl.configure(text=f"🏠 Real ISP IP: {self.real_isp_ip} (Direct Connection)"))
             else:
                 self._update_status("● Tor Start Failed", "#ef4444")
                 self._update_ip("Failed to Start", "📍 Location: Unavailable")
@@ -836,12 +876,15 @@ class TorRotatorGUI(ctk.CTk):
                     text="CURRENT IP (DIRECT REAL CONNECTION)",
                     text_color="#9ca3af"
                 ))
+            if hasattr(self, "real_ip_lbl"):
+                self._safe_after(0, lambda: self.real_ip_lbl.configure(text="🧅 Tor Status: Disabled / Stopped"))
 
             # 4. Detect real direct ISP IP without proxy
             try:
                 direct_resp = requests.get("https://api.ipify.org", timeout=8)
                 if direct_resp.status_code == 200:
                     real_ip = direct_resp.text.strip()
+                    self.real_isp_ip = real_ip
                     self._update_ip(real_ip, "📍 Location: Direct ISP Connection (Real IP)")
                     logger.info(f"Direct connection active. Real ISP IP: {real_ip}")
                 else:
@@ -872,6 +915,15 @@ class TorRotatorGUI(ctk.CTk):
         self.refresh_btn.configure(state="disabled")
         def run():
             self._update_status("● Checking IP...", "#f59e0b")
+            try:
+                r_resp = requests.get("https://api.ipify.org", timeout=5)
+                if r_resp.status_code == 200:
+                    self.real_isp_ip = r_resp.text.strip()
+                    if self.is_tor_active and hasattr(self, "real_ip_lbl"):
+                        self._safe_after(0, lambda: self.real_ip_lbl.configure(text=f"🏠 Real ISP IP: {self.real_isp_ip} (Direct Connection)"))
+            except Exception:
+                pass
+
             if self.is_tor_active:
                 ip, err = self.rotator.get_current_ip(retries=3)
                 if ip:
