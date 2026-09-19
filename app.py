@@ -407,23 +407,106 @@ class TorRotator:
         return self._auto_thread is not None and self._auto_thread.is_alive()
 
 
-def render_banner(current_ip: str, tor_status: str, rotation_status: str):
-    """Renders the CLI status banner matching prompt specifications."""
-    print("\n" + "=" * 32)
-    print("       Tor IP Rotator")
-    print("=" * 32)
-    print(f"Current IP: {current_ip}")
-    print(f"Tor Status: {tor_status}")
-    print(f"Rotation  : {rotation_status}")
-    print("=" * 32)
+def get_direct_real_ip(timeout: int = 6) -> Tuple[Optional[str], Optional[str]]:
+    """Fetches the user's real direct ISP IP without proxy."""
+    urls = [
+        "https://api.ipify.org?format=json",
+        "https://api.ipify.org",
+        "https://icanhazip.com",
+        "http://ip-api.com/json"
+    ]
+    for u in urls:
+        try:
+            r = requests.get(u, timeout=timeout)
+            if r.status_code == 200:
+                try:
+                    data = r.json()
+                    ip = data.get("ip") or data.get("query")
+                    if ip:
+                        return ip.strip(), None
+                except Exception:
+                    pass
+                text = r.text.strip()
+                if text:
+                    return text, None
+        except Exception:
+            continue
+    return None, "Failed to reach direct IP service"
+
+
+def start_tor_process() -> Tuple[bool, str]:
+    """Starts user-owned local Tor background process."""
+    import shutil
+    import subprocess
+    try:
+        tor_bin = shutil.which("tor") or shutil.which("tor.exe")
+        if not tor_bin and platform.system().lower() == "windows":
+            for p in [
+                os.path.expandvars(r"%ProgramFiles%\Tor Browser\Browser\TorBrowser\Tor\tor.exe"),
+                os.path.expandvars(r"%LOCALAPPDATA%\Programs\Tor Browser\Browser\TorBrowser\Tor\tor.exe"),
+                r"C:\Tor\tor.exe",
+            ]:
+                if os.path.exists(p):
+                    tor_bin = p
+                    break
+        if not tor_bin:
+            return False, "Tor executable not found in PATH or standard installation directories."
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        torrc_path = os.path.join(base_dir, "tor", "torrc")
+        data_dir = os.path.join(base_dir, "tor", "data")
+        os.makedirs(data_dir, exist_ok=True)
+
+        cmd = [tor_bin, "-f", torrc_path, "--DataDirectory", data_dir]
+        if platform.system().lower() != "windows":
+            cmd.extend(["--RunAsDaemon", "1"])
+            subprocess.run(cmd, check=False)
+        else:
+            subprocess.Popen(
+                cmd,
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0
+            )
+        return True, "Tor daemon started."
+    except Exception as e:
+        return False, f"Failed to start Tor process: {e}"
+
+
+def stop_tor_process() -> Tuple[bool, str]:
+    """Stops the Tor process."""
+    import subprocess
+    try:
+        if platform.system().lower() == "windows":
+            subprocess.run(["taskkill", "/F", "/IM", "tor.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            subprocess.run(["killall", "tor"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True, "Tor process stopped."
+    except Exception as e:
+        return False, f"Failed to stop Tor process: {e}"
+
+
+def render_banner(real_ip: str, tor_ip: Optional[str], tor_status: str, rotation_status: str):
+    """Renders the CLI status banner clearly separating Real ISP IP and Tor Exit IP."""
+    print("\n" + "=" * 44)
+    print("           🧅 Tor IP Rotator (CLI)")
+    print("=" * 44)
+    print(f" Real ISP IP : {real_ip or 'Detecting...'}")
+    if tor_status == "Connected":
+        print(f" Tor Exit IP : {tor_ip or 'Fetching...'}")
+        print(f" Tor Status  : ● Connected (Routing Active)")
+    else:
+        print(f" Tor Exit IP : [Tor is Stopped]")
+        print(f" Tor Status  : ● Disabled (Browsing with Real IP)")
+    print(f" Rotation    : {rotation_status}")
+    print("=" * 44)
     print("Commands:\n")
-    print("1. Show IP")
-    print("2. Change IP")
-    print("3. Start Auto Rotation")
-    print("4. Stop Auto Rotation")
-    print("5. Status")
-    print("6. Stop Tor and Browse with Real IP")
-    print("7. Exit")
+    print("1. Show IPs (Real ISP IP & Tor Exit IP)")
+    print("2. Change Tor IP (Request New Circuit)")
+    print("3. Start Auto-Rotation")
+    print("4. Stop Auto-Rotation")
+    print("5. Detailed Status")
+    print("6. 🚀 Enable / Start Tor")
+    print("7. 🛑 Stop Tor & Browse with Real IP")
+    print("8. Exit")
     print()
 
 
@@ -431,21 +514,20 @@ def run_cli():
     """Main CLI loop."""
     rotator = TorRotator()
 
-    # Initial connection check
+    # Initial check
+    print("[*] Detecting network interfaces and IP addresses...")
+    real_ip, _ = get_direct_real_ip()
     connected, conn_msg = rotator.check_tor_connection()
-    if not connected:
-        print(f"\n{conn_msg}\n")
+    if connected:
+        tor_ip, _ = rotator.get_current_ip(retries=2)
     else:
-        ip, err = rotator.get_current_ip()
-        if ip:
-            logger.info(f"Current IP: {ip}")
+        tor_ip = None
 
     while True:
-        tor_status = "Connected" if rotator.is_connected else "Disconnected"
-        cur_ip = rotator.current_ip or "Checking..."
-        rot_status = f"Every {rotator.interval_minutes} minutes (Running)" if rotator.is_auto_rotation_running() else f"Every {rotator.interval_minutes} minutes (Stopped)"
+        tor_status = "Connected" if rotator.is_connected else "Disabled"
+        rot_status = f"Every {rotator.interval_minutes} min (Running)" if rotator.is_auto_rotation_running() else f"Every {rotator.interval_minutes} min (Stopped)"
 
-        render_banner(cur_ip, tor_status, rot_status)
+        render_banner(real_ip or "Unknown", tor_ip, tor_status, rot_status)
 
         try:
             choice = input("> ").strip()
@@ -455,25 +537,44 @@ def run_cli():
             break
 
         if choice == "1":
-            print("\nQuerying current Tor IP...")
-            ip, err = rotator.get_current_ip()
-            if ip:
-                print(f"\nTor IP: {ip}\n")
-                logger.info(f"Current IP: {ip}")
+            print("\n--- Current IP Information ---")
+            r_ip, r_err = get_direct_real_ip()
+            if r_ip:
+                real_ip = r_ip
+                print(f" [✓] Real ISP IP (Direct) : {real_ip}")
             else:
-                print(f"\n[!] Error: {err}\n")
+                print(f" [!] Real ISP IP error   : {r_err}")
+
+            if rotator.is_connected:
+                t_ip, t_err = rotator.get_current_ip()
+                if t_ip:
+                    tor_ip = t_ip
+                    loc = rotator.current_country or "Global"
+                    print(f" [✓] Tor Exit IP (Proxied): {tor_ip} (Location: {loc})")
+                else:
+                    print(f" [!] Tor Exit IP error   : {t_err}")
+            else:
+                print(" [-] Tor Exit IP (Proxied): Tor is currently STOPPED")
+            print("------------------------------\n")
 
         elif choice == "2":
+            if not rotator.is_connected:
+                print("\n[!] Tor is currently stopped. Choose option 6 to enable Tor first.\n")
+                continue
             print("\nRequesting new Tor circuit...\n")
             success, old_ip, new_ip, err = rotator.rotate_ip()
             if success:
-                print(f"Old IP:\n{old_ip}\n")
-                print(f"New IP:\n{new_ip}\n")
+                tor_ip = new_ip
+                print(f"Old Tor IP:\n{old_ip}\n")
+                print(f"New Tor IP:\n{new_ip}\n")
                 print("Rotation successful.\n")
             else:
                 print(f"[!] Rotation failed: {err}\n")
 
         elif choice == "3":
+            if not rotator.is_connected:
+                print("\n[!] Tor is currently stopped. Choose option 6 to enable Tor first.\n")
+                continue
             if rotator.is_auto_rotation_running():
                 print(f"\nAuto-rotation is already running (Interval: {rotator.interval_minutes} minutes).\n")
             else:
@@ -498,8 +599,9 @@ def run_cli():
             status_text = "Connected" if conn else f"Disconnected ({msg})"
             auto_text = "Active" if rotator.is_auto_rotation_running() else "Inactive"
             print("\n--- Detailed Status ---")
+            print(f"Real ISP IP         : {real_ip or 'Unknown'}")
             print(f"Tor Connection      : {status_text}")
-            print(f"Current Exit IP     : {rotator.current_ip or 'Unknown'}")
+            print(f"Current Exit IP     : {rotator.current_ip or 'None (Tor Stopped)'}")
             print(f"SOCKS5 Proxy        : {rotator.socks_proxy_url}")
             print(f"Control Port        : {rotator.control_host}:{rotator.control_port}")
             print(f"Auto-Rotation       : {auto_text}")
@@ -509,6 +611,25 @@ def run_cli():
             print("-----------------------\n")
 
         elif choice == "6":
+            print("\n[*] Starting Tor daemon and establishing circuits...")
+            started, msg = start_tor_process()
+            time.sleep(2.5)
+            conn, cmsg = rotator.check_tor_connection()
+            if conn:
+                rotator.is_connected = True
+                print("[✓] Tor connected successfully.")
+                t_ip, _ = rotator.get_current_ip(retries=3)
+                if t_ip:
+                    tor_ip = t_ip
+                    print(f"[✓] Assigned Tor Exit IP: {tor_ip}")
+                else:
+                    print("[!] Tor circuit establishing, please wait a moment...")
+            else:
+                print(f"[!] Could not connect to Tor: {cmsg}")
+                if "connection refused" in cmsg.lower() and platform.system().lower() == "linux":
+                    print("[!] Tip: If Tor was stopped, run 'sudo systemctl start tor' or start user tor.")
+
+        elif choice == "7":
             print("\n[*] Stopping Tor routing and restoring direct connection...")
             # 1. Stop auto-rotation if active
             if rotator.is_auto_rotation_running():
@@ -526,29 +647,21 @@ def run_cli():
                 print(f"[!] Note on VPN deactivation: {e}")
 
             # 3. Stop local Tor background daemon
-            try:
-                import subprocess
-                if platform.system().lower() == "windows":
-                    subprocess.run(["taskkill", "/F", "/IM", "tor.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                else:
-                    subprocess.run(["killall", "tor"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                rotator.is_connected = False
-                rotator.current_ip = None
-                print("[✓] Tor service stopped.")
-            except Exception as e:
-                print(f"[!] Note on Tor shutdown: {e}")
+            stop_tor_process()
+            rotator.is_connected = False
+            rotator.current_ip = None
+            tor_ip = None
+            print("[✓] Tor service stopped.")
 
             # 4. Detect real direct ISP IP (without SOCKS proxy)
-            print("[*] Detecting real ISP IP...")
-            try:
-                direct_resp = requests.get("https://api.ipify.org", timeout=10)
-                if direct_resp.status_code == 200:
-                    real_ip = direct_resp.text.strip()
-                    print(f"\n========================================")
-                    print(f" [✓] Real ISP IP: {real_ip}")
-                    print(f"========================================\n")
-            except Exception as e:
-                print(f"[!] Direct IP check failed: {e}\n")
+            print("[*] Verifying direct real ISP IP...")
+            r_ip, _ = get_direct_real_ip()
+            if r_ip:
+                real_ip = r_ip
+            print(f"\n========================================")
+            print(f" [✓] Direct Connection Active!")
+            print(f" [✓] Real ISP IP: {real_ip}")
+            print(f"========================================\n")
 
             # 5. Open standard default browser
             print("[*] Launching standard browser with your real IP...")
@@ -559,13 +672,13 @@ def run_cli():
             except Exception as e:
                 print(f"[!] Could not launch browser: {e}\n")
 
-        elif choice == "7":
+        elif choice == "8":
             print("\nStopping services and exiting...")
             rotator.stop_auto_rotation()
             break
 
         else:
-            print("\nInvalid selection. Please choose an option from 1 to 7.")
+            print("\nInvalid selection. Please choose an option from 1 to 8.")
 
 
 if __name__ == "__main__":
