@@ -708,6 +708,12 @@ class TorRotatorGUI(ctk.CTk):
     def _toggle_virtual_adapter_vpn(self):
         """Toggles the tun2socks virtual network adapter (Wintun/TUN) to route 100% of PC traffic."""
         if not self.vpn_controller.is_active:
+            if not self.is_tor_active:
+                logger.warning("Tor must be enabled before activating Virtual Adapter VPN. Click '🚀 Enable Tor' first.")
+                self.vpn_status_lbl.configure(text="VPN: Enable Tor First!", text_color="#f59e0b")
+                self._safe_after(3000, lambda: self.vpn_status_lbl.configure(text="VPN: Inactive", text_color="#9ca3af"))
+                return
+
             self.tun_vpn_btn.configure(state="disabled", text="⏳ Starting VPN...")
             def run():
                 success, msg = self.vpn_controller.start_vpn()

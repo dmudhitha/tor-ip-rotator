@@ -27,7 +27,14 @@ echo "[*] Interface: $DEFAULT_IFACE | Gateway: $DEFAULT_GW | Local IP: $DEFAULT_
 
 # Ensure Tor binds outgoing relay traffic to physical IP to prevent routing loops
 echo "[*] Binding Tor daemon outbound connections to $DEFAULT_IP..."
-python3 -c "
+VENV_PY="$DIR/.venv/bin/python"
+if [ -x "$VENV_PY" ]; then
+    PYTHON_BIN="$VENV_PY"
+else
+    PYTHON_BIN="python3"
+fi
+
+"$PYTHON_BIN" -c "
 from stem.control import Controller
 try:
     with Controller.from_port(port=9051) as c:
@@ -45,7 +52,7 @@ ip rule add from "$DEFAULT_IP" table 100 priority 100
 ip route add default via "$DEFAULT_GW" dev "$DEFAULT_IFACE" table 100
 
 echo "[*] Cleaning up any previous virtual TUN adapter..."
-killall tun2socks-linux-amd64 2>/dev/null
+pkill -f tun2socks-linux-amd64 2>/dev/null || killall tun2socks-linux-amd64 2>/dev/null || true
 ip route del 0.0.0.0/1 dev tun0 2>/dev/null
 ip route del 128.0.0.0/1 dev tun0 2>/dev/null
 ip link delete tun0 2>/dev/null
@@ -56,8 +63,14 @@ ip addr add 198.18.0.1/15 dev tun0
 ip link set dev tun0 up
 
 echo "[*] Starting tun2socks routing engine..."
-"$BIN" --device tun0 --proxy socks5://127.0.0.1:9050 --interface "$DEFAULT_IFACE" &
-sleep 2
+nohup "$BIN" --device tun0 --proxy socks5://127.0.0.1:9050 --interface "$DEFAULT_IFACE" </dev/null >/tmp/tun2socks.log 2>&1 &
+sleep 1.5
+
+if ! pgrep -f tun2socks-linux-amd64 >/dev/null; then
+    echo "[ERROR] tun2socks failed to start. Log output:"
+    cat /tmp/tun2socks.log 2>/dev/null
+    exit 1
+fi
 
 # Add routes to direct all system traffic into tun0
 echo "[*] Redirecting system routes into virtual adapter..."

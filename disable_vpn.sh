@@ -14,7 +14,7 @@ echo "[*] Deactivating System-Wide Tor VPN..."
 
 ip route del 0.0.0.0/1 dev tun0 2>/dev/null
 ip route del 128.0.0.0/1 dev tun0 2>/dev/null
-killall tun2socks-linux-amd64 2>/dev/null
+pkill -f tun2socks-linux-amd64 2>/dev/null || killall tun2socks-linux-amd64 2>/dev/null || true
 ip link delete tun0 2>/dev/null
 
 DEFAULT_IFACE=$(ip route show default | awk '/default/ {print $5}' | head -n1)

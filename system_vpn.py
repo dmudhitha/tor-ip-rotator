@@ -121,6 +121,9 @@ class SystemVpnController:
             logger.info("System-wide virtual network adapter started.")
             return True, "Virtual network adapter activated. System-wide traffic routed through Tor."
 
+        except subprocess.TimeoutExpired:
+            self.is_active = False
+            return False, "VPN Activation timed out (polkit authentication prompt was dismissed or took longer than 60 seconds)."
         except PermissionError:
             self.is_active = False
             return False, "Administrator/root privileges required to create virtual network adapter."
